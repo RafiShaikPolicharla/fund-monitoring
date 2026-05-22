@@ -1,0 +1,1 @@
+alter view v_event_feed set (security_invoker = true);
