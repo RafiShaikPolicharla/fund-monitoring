@@ -11,6 +11,7 @@ import { GuardrailSteps, GuardrailStep } from "@/components/GuardrailSteps";
 import { buildEventGuardrailSteps, runStepSequence } from "@/lib/guardrailSequences";
 import { ChatPanel, ChatToggleButton } from "@/components/ChatPanel";
 import { cn } from "@/lib/utils";
+import { fundMonitoringAgentflow } from "@/services/fundMonitoringAgentflow";
 
 type Fund = {
   id: string;
@@ -90,12 +91,29 @@ export default function Simulate() {
 
   // Load funds
   useEffect(() => {
-    supabase
-      .from("funds")
-      .select("id, ticker, name, pilot")
-      .eq("approved_list", true)
-      .order("ticker")
-      .then(({ data }) => setFunds((data ?? []) as Fund[]));
+    (async () => {
+      try {
+        const agentFunds = await fundMonitoringAgentflow.getFundUniverse();
+        if (agentFunds.length > 0) {
+          setFunds(agentFunds.map((fund) => ({
+            id: fund.id,
+            ticker: fund.ticker,
+            name: fund.name,
+            pilot: fund.pilot,
+          })));
+          return;
+        }
+      } catch {
+        // Fall back to Supabase fixture data below.
+      }
+
+      const { data } = await supabase
+        .from("funds")
+        .select("id, ticker, name, pilot")
+        .eq("approved_list", true)
+        .order("ticker");
+      setFunds((data ?? []) as Fund[]);
+    })();
   }, []);
 
   const pilotFunds = useMemo(() => funds.filter((f) => f.pilot), [funds]);
@@ -167,17 +185,36 @@ export default function Simulate() {
       label = `${selectedSingleFund.ticker} — ${selectedSingleFund.name}`;
     }
 
-    const { data: evData } = await supabase
-      .from("events")
-      .select("id, fund_id, event_date, headline, raw_summary, source_publisher, category")
-      .in("fund_id", fundIds)
-      .gte("event_date", sinceStr)
-      .order("event_date", { ascending: false });
+    let evList: EventRow[] = [];
+    let agentAlerts: Record<string, Alert> = {};
 
-    const evList = (evData ?? []) as EventRow[];
+    const loadMockEvents = async () => {
+      const { data: evData } = await supabase
+        .from("events")
+        .select("id, fund_id, event_date, headline, raw_summary, source_publisher, category")
+        .in("fund_id", fundIds)
+        .gte("event_date", sinceStr)
+        .order("event_date", { ascending: false });
+      evList = (evData ?? []) as EventRow[];
+      agentAlerts = {};
+    };
+
+    try {
+      const queryFundLabel =
+        selectedFund === ALL_PILOT
+          ? "all pilot funds"
+          : selectedSingleFund?.ticker || selectedSingleFund?.name || label;
+      const agentResult = await fundMonitoringAgentflow.findEvents(queryFundLabel, lookbackDays);
+      evList = agentResult.events as EventRow[];
+      agentAlerts = agentResult.alerts as Record<string, Alert>;
+      if (evList.length === 0) await loadMockEvents();
+    } catch {
+      await loadMockEvents();
+    }
+
     setEvents(evList);
 
-    if (evList.length) {
+    if (evList.length && Object.keys(agentAlerts).length === 0) {
       const eventIds = evList.map((e) => e.id);
       const [{ data: actData }, { data: alertData }] = await Promise.all([
         supabase
@@ -200,7 +237,16 @@ export default function Simulate() {
 
     const initialCards: Record<string, CardState> = {};
     evList.forEach((e) => {
-      initialCards[e.id] = { status: "idle", steps: [], hasWarning: false, expanded: false };
+      initialCards[e.id] = agentAlerts[e.id]
+        ? {
+            status: "done",
+            steps: [],
+            hasWarning: false,
+            alert: agentAlerts[e.id],
+            rawResponse: agentAlerts[e.id],
+            expanded: false,
+          }
+        : { status: "idle", steps: [], hasWarning: false, expanded: false };
     });
     setCards(initialCards);
 

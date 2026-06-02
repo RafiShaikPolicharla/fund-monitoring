@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import TopBar from "@/components/TopBar";
 import { formatAum } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { fundMonitoringAgentflow } from "@/services/fundMonitoringAgentflow";
 
 type Row = {
   id: string;
@@ -25,6 +26,17 @@ export default function FundUniverse() {
 
   useEffect(() => {
     (async () => {
+      try {
+        const agentRows = await fundMonitoringAgentflow.getFundUniverse();
+        if (agentRows.length > 0) {
+          setRows(agentRows);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // Fall back to Supabase fixture data below.
+      }
+
       const { data } = await supabase
         .from("funds")
         .select("id, ticker, name, asset_class, aum_usd_billions, named_pms, pilot, managers(name)")
