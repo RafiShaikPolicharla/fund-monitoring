@@ -18,6 +18,7 @@ import { GuardrailSteps, GuardrailStep } from "@/components/GuardrailSteps";
 import { buildBatchGuardrailSteps, runStepSequence } from "@/lib/guardrailSequences";
 import { ChatPanel, ChatToggleButton } from "@/components/ChatPanel";
 import { cn } from "@/lib/utils";
+import { fundMonitoringAgentflow } from "@/services/fundMonitoringAgentflow";
 
 type BatchRun = {
   id: string;
@@ -109,7 +110,9 @@ export default function DailyOperations() {
   const [submitting, setSubmitting] = useState(false);
 
   const loadAll = async () => {
-    const [{ data: runs }, { data: q }, { data: a }] = await Promise.all([
+    setLoading(true);
+    const [agentQueueResult, runsResult, supabaseQueueResult, actionedResult] = await Promise.allSettled([
+      fundMonitoringAgentflow.getAlertQueue(),
       supabase
         .from("batch_runs")
         .select("*")
@@ -118,11 +121,20 @@ export default function DailyOperations() {
       supabase.from("v_alert_queue").select("*"),
       supabase.from("v_recently_actioned").select("*"),
     ]);
+
+    const runs = runsResult.status === "fulfilled" ? runsResult.value.data : [];
+    const actionedRows = actionedResult.status === "fulfilled" ? actionedResult.value.data : [];
+    const supabaseQueue = supabaseQueueResult.status === "fulfilled" ? supabaseQueueResult.value.data : [];
+    const agentQueue =
+      agentQueueResult.status === "fulfilled" && agentQueueResult.value.length > 0
+        ? agentQueueResult.value
+        : null;
+
     const runList = (runs ?? []) as BatchRun[];
     setAllRuns(runList);
     setLatestRun(runList[0] ?? null);
-    setQueue((q ?? []) as QueueRow[]);
-    setActioned((a ?? []) as ActionedRow[]);
+    setQueue((agentQueue ?? supabaseQueue ?? []) as QueueRow[]);
+    setActioned((actionedRows ?? []) as ActionedRow[]);
     setLoading(false);
   };
 
