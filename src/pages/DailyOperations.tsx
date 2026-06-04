@@ -85,11 +85,45 @@ const REJECT_REASONS = [
   "Other (specify)",
 ];
 
+function buildAgentflowRun(queue: QueueRow[]): BatchRun {
+  const now = new Date().toISOString();
+  return {
+    id: "agentflow_daily_run",
+    started_at: now,
+    completed_at: now,
+    sources_scanned: new Set(queue.map((row) => row.source_publisher).filter(Boolean)).size,
+    candidate_events: queue.length,
+    alerts_produced: queue.length,
+    alerts_suppressed: 0,
+    tier1_count: queue.filter((row) => row.tier === 1).length,
+    tier2_count: queue.filter((row) => row.tier === 2).length,
+    tier3_count: queue.filter((row) => row.tier === 3).length,
+  };
+}
+
+function toActionedRow(row: QueueRow, status: string, editedMessage?: string | null, rejectionReason?: string | null): ActionedRow {
+  return {
+    alert_id: row.alert_id,
+    tier: row.tier,
+    status,
+    reviewer_name: REVIEWER,
+    reviewed_at: new Date().toISOString(),
+    edited_advisor_message: editedMessage ?? null,
+    rejection_reason: rejectionReason ?? null,
+    original_advisor_message: row.advisor_message,
+    headline: row.headline,
+    event_date: row.event_date,
+    ticker: row.ticker,
+    fund_name: row.fund_name,
+  };
+}
+
 export default function DailyOperations() {
   const [latestRun, setLatestRun] = useState<BatchRun | null>(null);
   const [allRuns, setAllRuns] = useState<BatchRun[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [actioned, setActioned] = useState<ActionedRow[]>([]);
+  const [agentflowMode, setAgentflowMode] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [expandedQueue, setExpandedQueue] = useState<Record<string, boolean>>({});
@@ -130,10 +164,22 @@ export default function DailyOperations() {
         ? agentQueueResult.value
         : null;
 
+    if (agentQueue) {
+      const agentRun = buildAgentflowRun(agentQueue as QueueRow[]);
+      setAgentflowMode(true);
+      setAllRuns([]);
+      setLatestRun(agentRun);
+      setQueue(agentQueue as QueueRow[]);
+      setActioned([]);
+      setLoading(false);
+      return;
+    }
+
     const runList = (runs ?? []) as BatchRun[];
+    setAgentflowMode(false);
     setAllRuns(runList);
     setLatestRun(runList[0] ?? null);
-    setQueue((agentQueue ?? supabaseQueue ?? []) as QueueRow[]);
+    setQueue((supabaseQueue ?? []) as QueueRow[]);
     setActioned((actionedRows ?? []) as ActionedRow[]);
     setLoading(false);
   };
@@ -202,6 +248,14 @@ export default function DailyOperations() {
   };
 
   const approve = async (alert: QueueRow) => {
+    if (agentflowMode) {
+      setQueue((prev) => prev.filter((row) => row.alert_id !== alert.alert_id));
+      setActioned((prev) => [toActionedRow(alert, "approved"), ...prev]);
+      setApproveTarget(null);
+      toast({ title: "Alert approved", description: alert.headline ?? "" });
+      return;
+    }
+
     setSubmitting(true);
     const { error } = await supabase
       .from("alerts")
@@ -223,6 +277,16 @@ export default function DailyOperations() {
 
   const submitEdit = async () => {
     if (!editTarget) return;
+    if (agentflowMode) {
+      setQueue((prev) => prev.filter((row) => row.alert_id !== editTarget.alert_id));
+      setActioned((prev) => [toActionedRow(editTarget, "edited", editText), ...prev]);
+      toast({ title: "Alert edited & approved" });
+      setEditTarget(null);
+      setEditText("");
+      setEditNotes("");
+      return;
+    }
+
     setSubmitting(true);
     const { error } = await supabase
       .from("alerts")
@@ -252,6 +316,16 @@ export default function DailyOperations() {
       toast({ title: "Reason required", variant: "destructive" });
       return;
     }
+    if (agentflowMode) {
+      setQueue((prev) => prev.filter((row) => row.alert_id !== rejectTarget.alert_id));
+      setActioned((prev) => [toActionedRow(rejectTarget, "rejected", null, reason), ...prev]);
+      toast({ title: "Alert rejected" });
+      setRejectTarget(null);
+      setRejectReason(REJECT_REASONS[0]);
+      setRejectOther("");
+      return;
+    }
+
     setSubmitting(true);
     const { error } = await supabase
       .from("alerts")
