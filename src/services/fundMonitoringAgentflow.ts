@@ -132,30 +132,75 @@ function parseNestedString(value: unknown): unknown {
   return tryParse(value) ?? value;
 }
 
+function decodeQuotedValue(value: string): string {
+  return value
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function extractQuotedKeyLists(raw: string, keys: string[]): unknown[] {
+  const rows: unknown[] = [];
+
+  for (const key of keys) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`['"]${escapedKey}['"]\\s*:\\s*'((?:\\\\.|[^'\\\\])*)'`, "g");
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(raw)) !== null) {
+      const parsed = tryParse(decodeQuotedValue(match[1]));
+      if (Array.isArray(parsed)) rows.push(...parsed);
+      else if (parsed && typeof parsed === "object") rows.push(parsed);
+    }
+  }
+
+  return rows;
+}
+
 function extractList(raw: string, keys: string[]): unknown[] {
+  const directlyExtracted = extractQuotedKeyLists(raw, keys);
+  if (directlyExtracted.length > 0) return directlyExtracted;
+
   const parsed = tryParse(raw);
   const candidates = Array.isArray(parsed) ? parsed : [parsed];
+  const collected: unknown[] = [];
+  let emptyMatch: unknown[] | null = null;
 
   for (const candidate of candidates) {
     const value = parseNestedString(candidate);
-    if (Array.isArray(value)) return value;
+    if (Array.isArray(value)) {
+      if (value.length > 0) collected.push(...value);
+      emptyMatch = value;
+      continue;
+    }
     if (!value || typeof value !== "object") continue;
 
     const record = value as Record<string, unknown>;
     for (const key of keys) {
       const nested = parseNestedString(record[key]);
-      if (Array.isArray(nested)) return nested;
+      if (Array.isArray(nested)) {
+        if (nested.length > 0) collected.push(...nested);
+        emptyMatch = nested;
+      }
     }
   }
+
+  if (collected.length > 0) return collected;
 
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     for (const value of Object.values(parsed as Record<string, unknown>)) {
       const nested = parseNestedString(value);
-      if (Array.isArray(nested)) return nested;
+      if (Array.isArray(nested)) {
+        if (nested.length > 0) collected.push(...nested);
+        emptyMatch = nested;
+      }
     }
   }
 
-  return [];
+  if (collected.length > 0) return collected;
+  return emptyMatch ?? [];
 }
 
 function toNumber(value: unknown): number | null {
@@ -285,6 +330,17 @@ export function buildInspectEventsQuery(fundLabel: string, lookbackDays: number)
   return `events of ${fundLabel} in the last ${lookbackDays} days`;
 }
 
+function mapInspectEventsFromText(text: string): { events: EventRow[]; alerts: Record<string, Alert> } {
+  const list = extractList(text, ["alert_queue", "events", "event_list", "data"]) as AgentEvent[];
+  const events = list.map(toEventRow);
+  const alerts: Record<string, Alert> = {};
+  list.forEach((item, index) => {
+    const event = events[index];
+    if (event) alerts[event.id] = toAlert(item);
+  });
+  return { events, alerts };
+}
+
 export const fundMonitoringAgentflow = {
   async getAlertQueue(): Promise<QueueRow[]> {
     const result = await askAgentflow(ALERT_QUEUE_QUERY);
@@ -295,14 +351,7 @@ export const fundMonitoringAgentflow = {
 
   async findEvents(fundLabel: string, lookbackDays: number): Promise<{ events: EventRow[]; alerts: Record<string, Alert> }> {
     const result = await askAgentflow(buildInspectEventsQuery(fundLabel, lookbackDays));
-    const list = extractList(result.text, ["alert_queue", "events", "event_list", "data"]) as AgentEvent[];
-    const events = list.map(toEventRow);
-    const alerts: Record<string, Alert> = {};
-    list.forEach((item, index) => {
-      const event = events[index];
-      if (event) alerts[event.id] = toAlert(item);
-    });
-    return { events, alerts };
+    return mapInspectEventsFromText(result.text);
   },
 
   async getFundUniverse(): Promise<FundRow[]> {
