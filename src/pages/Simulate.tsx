@@ -92,21 +92,6 @@ export default function Simulate() {
   // Load funds
   useEffect(() => {
     (async () => {
-      try {
-        const agentFunds = await fundMonitoringAgentflow.getFundUniverse();
-        if (agentFunds.length > 0) {
-          setFunds(agentFunds.map((fund) => ({
-            id: fund.id,
-            ticker: fund.ticker,
-            name: fund.name,
-            pilot: fund.pilot,
-          })));
-          return;
-        }
-      } catch {
-        // Fall back to Supabase fixture data below.
-      }
-
       const { data } = await supabase
         .from("funds")
         .select("id, ticker, name, pilot")
