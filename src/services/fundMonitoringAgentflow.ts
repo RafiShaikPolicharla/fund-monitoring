@@ -164,18 +164,17 @@ function extractList(raw: string, keys: string[]): unknown[] {
   if (directlyExtracted.length > 0) return directlyExtracted;
 
   const parsed = tryParse(raw);
-  const candidates = Array.isArray(parsed) ? parsed : [parsed];
   const collected: unknown[] = [];
   let emptyMatch: unknown[] | null = null;
 
-  for (const candidate of candidates) {
+  const visit = (candidate: unknown) => {
     const value = parseNestedString(candidate);
     if (Array.isArray(value)) {
-      if (value.length > 0) collected.push(...value);
-      emptyMatch = value;
-      continue;
+      if (value.length === 0) emptyMatch = value;
+      value.forEach(visit);
+      return;
     }
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") return;
 
     const record = value as Record<string, unknown>;
     for (const key of keys) {
@@ -185,21 +184,16 @@ function extractList(raw: string, keys: string[]): unknown[] {
         emptyMatch = nested;
       }
     }
-  }
+  };
+
+  visit(parsed);
 
   if (collected.length > 0) return collected;
 
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    for (const value of Object.values(parsed as Record<string, unknown>)) {
-      const nested = parseNestedString(value);
-      if (Array.isArray(nested)) {
-        if (nested.length > 0) collected.push(...nested);
-        emptyMatch = nested;
-      }
-    }
+  const root = parseNestedString(parsed);
+  if (Array.isArray(root) && root.every((item) => item && typeof item === "object" && !keys.some((key) => key in (item as Record<string, unknown>)))) {
+    return root;
   }
-
-  if (collected.length > 0) return collected;
   return emptyMatch ?? [];
 }
 
