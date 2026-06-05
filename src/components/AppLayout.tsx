@@ -15,7 +15,7 @@ export default function AppLayout() {
     <div className="min-h-screen flex bg-background">
       <aside className="w-60 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col">
         <div className="px-5 py-5 border-b border-sidebar-border">
-          <div className="text-[15px] font-semibold tracking-tight">Citizens Wealth</div>
+          <div className="text-[15px] font-semibold tracking-tight">Fund Monitoring</div>
           <div className="text-[11px] uppercase tracking-wider text-sidebar-foreground/60 mt-0.5">
             Research & Alerting
           </div>
